@@ -1,0 +1,91 @@
+name: Build PS4 Controller Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # PkgTool.Core e dotnet: evita falhas por ICU ausente e permite rodar em runtime mais novo
+  DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+  DOTNET_ROLL_FORWARD: Major
+  DOTNET_ROOT: /usr/share/dotnet
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Descompactar o projeto
+        run: |
+          unzip -q -o ps4-controller-test.zip
+          ls -R ps4-controller-test
+
+      - name: Icone (icon.png na raiz do repo)
+        run: |
+          if [ -f icon.png ]; then
+            cp icon.png ps4-controller-test/icon.png
+            python3 - <<'PY'
+          import struct
+          d = open("icon.png", "rb").read(24)
+          w, h = struct.unpack(">II", d[16:24])
+          print(f"icon.png: {w}x{h}")
+          if (w, h) != (512, 512):
+              print("::warning::icon.png deveria ser 512x512 para o PS4")
+          PY
+          else
+            echo "::warning::icon.png nao encontrado na raiz; sera usado um icone placeholder"
+          fi
+
+      - name: Instalar clang e lld
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+
+      - name: Baixar o OpenOrbis PS4 Toolchain (ultima release, Linux)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          REPO=OpenOrbis/OpenOrbis-PS4-Toolchain
+          mkdir -p _dl sdk
+
+          echo "Assets da ultima release:"
+          gh release view --repo "$REPO" --json tagName,assets -q '.tagName, (.assets[].name)'
+
+          gh release download --repo "$REPO" --pattern '*linux*' --dir _dl \
+            || gh release download --repo "$REPO" --pattern '*.tar.gz' --dir _dl
+          ls -la _dl
+
+          for f in _dl/*; do
+            case "$f" in
+              *.tar.gz|*.tgz) tar -xzf "$f" -C sdk ;;
+              *.zip)          unzip -q "$f" -d sdk ;;
+              *)              echo "Ignorando $f" ;;
+            esac
+          done
+
+          LINKX=$(find sdk -name link.x | head -n 1)
+          if [ -z "$LINKX" ]; then
+            echo "link.x nao encontrado: estrutura do SDK inesperada"; find sdk -maxdepth 3; exit 1
+          fi
+          ROOT="$GITHUB_WORKSPACE/$(dirname "$LINKX")"
+          echo "OO_PS4_TOOLCHAIN=$ROOT" >> "$GITHUB_ENV"
+          chmod -R +x "$ROOT/bin/linux" || true
+          echo "SDK em: $ROOT"
+          ls "$ROOT/bin/linux"
+
+      - name: Compilar e gerar o PKG
+        working-directory: ps4-controller-test
+        run: make pkg
+
+      - name: Enviar artefatos
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps4-controller-test
+          path: |
+            ps4-controller-test/build/pkg/*.pkg
+            ps4-controller-test/build/eboot.bin
+            ps4-controller-test/build/controller_test.elf
