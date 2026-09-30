@@ -77,16 +77,20 @@ jobs:
           echo "SDK em: $ROOT"
           ls "$ROOT/bin/linux"
 
-      - name: Mostrar headers do SDK (diagnostico)
+      - name: Instalar libssl1.1 (necessario para o PkgTool.Core)
         run: |
-          for f in orbis/_types/pad.h orbis/_types/video.h orbis/VideoOut.h; do
-            echo "::group::$f"
-            cat "$OO_PS4_TOOLCHAIN/include/$f" || true
-            echo "::endgroup::"
-          done
+          set -e
+          # O PkgTool.Core usa um runtime .NET antigo que so aceita OpenSSL 1.x.
+          # O Ubuntu 24.04 so traz libssl3, entao instalamos a 1.1 do repositorio do focal.
+          wget -q https://security.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb \
+            || wget -q http://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2_amd64.deb
+          sudo dpkg -i libssl1.1_*_amd64.deb
+          ldconfig -p | grep libssl
 
       - name: Compilar e gerar o PKG
         working-directory: ps4-controller-test
+        env:
+          CLR_OPENSSL_VERSION_OVERRIDE: "1.1"
         run: make pkg
 
       - name: Enviar artefatos
